@@ -278,7 +278,7 @@ document.addEventListener("DOMContentLoaded", () => {
             timer: 2000,
             showConfirmButton: false
           }).then(() => {
-            window.location.reload();
+            window.location.href = result.redirect;
           });
         } else {
           const loginError = document.getElementById("loginError");

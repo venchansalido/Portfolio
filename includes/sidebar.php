@@ -16,6 +16,10 @@
     </nav>
 
     <div class="sidebar-footer">
+        <button id="logoutBtn" class="logout-btn">
+            <i class="fas fa-right-from-bracket"></i>
+            <span>Logout</span>
+        </button>
         <a href="../pages/index.php" class="view-page-btn">
             <i class="fas fa-arrow-left"></i>
             <span>View Page</span>
@@ -170,6 +174,34 @@ body {
 .sidebar-footer {
     padding: 1.6rem 1.2rem 2.4rem;
     border-top: 0.1rem solid rgba(255, 255, 255, 0.07);
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+}
+
+.logout-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.8rem;
+    width: 100%;
+    padding: 1.1rem 1.6rem;
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 1.4rem;
+    font-weight: 700;
+    font-family: 'Poppins', sans-serif;
+    border: 0.1rem solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.8rem;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.logout-btn:hover {
+    background: rgba(218, 4, 22, 0.2);
+    color: var(--white);
+    border-color: var(--red);
+    transform: translateY(-0.2rem);
 }
 
 .view-page-btn {
@@ -244,6 +276,7 @@ body {
 
 <script>
 document.addEventListener("DOMContentLoaded", () => {
+    // Active nav link
     const currentPage = window.location.pathname.split("/").pop();
     document.querySelectorAll(".nav-link").forEach(link => {
         const linkPage = link.getAttribute("href").split("/").pop();
@@ -251,5 +284,16 @@ document.addEventListener("DOMContentLoaded", () => {
             link.classList.add("active");
         }
     });
+
+    // Logout button
+    const logoutBtn = document.getElementById("logoutBtn");
+    if (logoutBtn) {
+        logoutBtn.addEventListener("click", async () => {
+            try {
+                await fetch("/venard/user/logout.php", { method: "POST" });
+            } catch (e) {}
+            window.location.href = "/venard/index.php";
+        });
+    }
 });
 </script>
