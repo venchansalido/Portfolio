@@ -576,7 +576,7 @@ $user = $result->fetch_assoc();
 
                 <!-- Edit Profile Button -->
                 <div class="text-center mt-2 mb-4">
-                    <a href="edit_profile.php" class="btn-edit">
+                    <a href="profile.php" class="btn-edit">
                         <i class="fas fa-pen"></i> Edit Profile
                     </a>
                 </div>
