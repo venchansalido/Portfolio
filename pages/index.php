@@ -104,6 +104,7 @@ $projects = [];
 $query = "SELECT p.*, 
                  (SELECT COUNT(*) FROM project_gallery WHERE project_id = p.id) as gallery_count
           FROM projects p 
+          WHERE p.is_hidden = 0
           ORDER BY p.created_at DESC";
 $result = $conn->query($query);
 if ($result) {

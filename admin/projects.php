@@ -5,6 +5,23 @@ include '../includes/restriction_admin.php';
 include '../includes/session_utils.php';
 if (!isset($_SESSION['user_id'])||$_SESSION['role']!=='admin'||!checkSessionExpiration()){session_unset();session_destroy();header('Location: ../index.php');exit;}
 
+// ── AJAX: Toggle visibility ───────────────────────────────────────────────────
+if(isset($_GET['ajax_toggle'])&&is_numeric($_GET['ajax_toggle'])){
+    header('Content-Type: application/json');
+    $id=(int)$_GET['ajax_toggle'];
+    $s=$conn->prepare("UPDATE projects SET is_hidden = NOT is_hidden WHERE id=?");
+    $s->bind_param("i",$id);
+    if($s->execute()){
+        $r=$conn->prepare("SELECT is_hidden FROM projects WHERE id=?");
+        $r->bind_param("i",$id);$r->execute();
+        $row=$r->get_result()->fetch_assoc();
+        echo json_encode(['success'=>true,'is_hidden'=>(int)$row['is_hidden']]);
+    } else {
+        echo json_encode(['success'=>false,'error'=>$conn->error]);
+    }
+    exit();
+}
+
 function uploadFile($file,$dir,$prefix,$pid=null){
     $ext=pathinfo($file['name'],PATHINFO_EXTENSION);
     $name=$prefix.'_'.time().'_'.($pid??'').'_'.uniqid().'.'.$ext;
@@ -57,7 +74,7 @@ if(isset($_GET['delete_image'])&&isset($_GET['project_id'])){
     if($d->execute()){if($ip&&file_exists($ip))unlink($ip);$_SESSION['success']="Image deleted!";}
     header("Location: projects.php?edit=".$pid);exit();
 }
-$projects=$conn->query("SELECT * FROM projects ORDER BY created_at DESC")->fetch_all(MYSQLI_ASSOC);
+$projects=$conn->query("SELECT p.*, (SELECT COUNT(*) FROM project_gallery WHERE project_id=p.id) as gallery_count FROM projects p ORDER BY p.created_at DESC")->fetch_all(MYSQLI_ASSOC);
 $editProject=null; $galleryImages=[];
 if(isset($_GET['edit'])&&is_numeric($_GET['edit'])){
     $s=$conn->prepare("SELECT * FROM projects WHERE id=?");$s->bind_param("i",$_GET['edit']);$s->execute();$r=$s->get_result();
@@ -102,6 +119,25 @@ if(isset($_GET['edit'])&&is_numeric($_GET['edit'])){
     .btn-outline-navy:hover{background:var(--navy);color:#fff}
     .btn-outline-danger{display:inline-flex;align-items:center;gap:0.6rem;background:transparent;color:var(--red);font-size:1.35rem;font-weight:600;padding:0.7rem 1.4rem;border-radius:0.7rem;border:0.15rem solid var(--red);cursor:pointer;font-family:'Poppins',sans-serif;text-decoration:none;transition:background 0.2s,color 0.2s}
     .btn-outline-danger:hover{background:var(--red);color:#fff}
+    /* Toggle visibility button styles */
+    .btn-toggle-vis{display:inline-flex;align-items:center;justify-content:center;background:transparent;font-size:1.35rem;font-weight:600;padding:0.6rem 1rem;border-radius:0.7rem;border:0.15rem solid;cursor:pointer;font-family:'Poppins',sans-serif;text-decoration:none;transition:background 0.2s,color 0.2s,border-color 0.2s,opacity 0.2s}
+    .btn-toggle-vis.visible{color:#b45309;border-color:#b45309;}
+    .btn-toggle-vis.visible:hover{background:#b45309;color:#fff;}
+    .btn-toggle-vis.hidden{color:#6b7a8d;border-color:#6b7a8d;}
+    .btn-toggle-vis.hidden:hover{background:#6b7a8d;color:#fff;}
+    .btn-toggle-vis.loading{opacity:0.5;pointer-events:none;}
+    /* Hidden badge on title */
+    .badge-hidden{display:inline-block;margin-left:0.6rem;background:rgba(180,83,9,0.12);color:#b45309;font-size:1.05rem;font-weight:700;padding:0.2rem 0.8rem;border-radius:2rem;border:0.1rem solid #b45309;vertical-align:middle;transition:opacity 0.3s;}
+    /* Row dimming when hidden */
+    tr.row-hidden td{opacity:0.5;}
+    tr.row-hidden:hover td{opacity:0.75;}
+    /* Toast notification */
+    #toast-container{position:fixed;top:2rem;right:2rem;z-index:9999;display:flex;flex-direction:column;gap:0.8rem;}
+    .toast-msg{display:flex;align-items:center;gap:1rem;padding:1.2rem 1.8rem;border-radius:0.9rem;font-size:1.35rem;font-weight:600;font-family:'Poppins',sans-serif;box-shadow:0 0.6rem 2rem rgba(14,36,49,0.15);animation:toastIn 0.3s cubic-bezier(0.34,1.4,0.64,1) both;}
+    .toast-msg.success{background:#fff;color:#166534;border-left:0.4rem solid #22c55e;}
+    .toast-msg.error{background:#fff;color:var(--red-dark);border-left:0.4rem solid var(--red);}
+    @keyframes toastIn{from{opacity:0;transform:translateX(3rem);}to{opacity:1;transform:translateX(0);}}
+    @keyframes toastOut{to{opacity:0;transform:translateX(3rem);}}
     .table{width:100%;border-collapse:collapse;font-size:1.35rem}
     .table th{background:var(--input-bg);color:var(--navy);font-weight:700;font-size:1.2rem;text-transform:uppercase;letter-spacing:0.05em;padding:1.2rem 1.4rem;border-bottom:0.2rem solid var(--border);text-align:left}
     .table td{padding:1.2rem 1.4rem;border-bottom:0.1rem solid var(--border);color:var(--navy);vertical-align:middle}
@@ -123,6 +159,10 @@ if(isset($_GET['edit'])&&is_numeric($_GET['edit'])){
 </head>
 <body>
 <button class="toggle-btn" id="menuToggle"><i class="fas fa-bars"></i></button>
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
 <div class="wrapper">
     <?php include '../includes/sidebar.php'; ?>
     <div class="main-content">
@@ -207,20 +247,41 @@ if(isset($_GET['edit'])&&is_numeric($_GET['edit'])){
             <?php else: ?>
             <div class="table-responsive">
                 <table class="table">
-                    <thead><tr><th>Thumbnail</th><th>Title</th><th>Description</th><th>Gallery</th><th>Actions</th></tr></thead>
-                    <tbody>
-                    <?php foreach($projects as $p):
-                        $s=$conn->prepare("SELECT COUNT(*) as c FROM project_gallery WHERE project_id=?");$s->bind_param("i",$p['id']);$s->execute();$gc=$s->get_result()->fetch_assoc()['c'];
-                    ?>
+                    <thead>
                         <tr>
+                            <th>Thumbnail</th>
+                            <th>Title</th>
+                            <th>Description</th>
+                            <th>Gallery</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach($projects as $p): ?>
+                        <tr id="row-<?=$p['id']?>" class="<?=$p['is_hidden']?'row-hidden':''?>">
                             <td><?php if($p['thumbnail_path']): ?><img src="<?=htmlspecialchars($p['thumbnail_path'])?>" class="thumb-preview" alt="Thumb"><?php else: ?><div style="width:8rem;height:6rem;background:var(--input-bg);border-radius:0.6rem;display:flex;align-items:center;justify-content:center;"><i class="fas fa-image" style="color:var(--muted);font-size:2rem;"></i></div><?php endif; ?></td>
-                            <td style="font-weight:600;"><?=htmlspecialchars($p['title'])?></td>
+                            <td style="font-weight:600;">
+                                <?=htmlspecialchars($p['title'])?>
+                                <span class="badge-hidden" id="badge-<?=$p['id']?>" style="<?=$p['is_hidden']?'':'display:none;'?>">Hidden</span>
+                            </td>
                             <td style="color:var(--muted);"><?=htmlspecialchars(substr($p['description'],0,60)).(strlen($p['description'])>60?'…':'')?></td>
-                            <td><span style="background:rgba(14,36,49,0.08);color:var(--navy);padding:0.3rem 0.9rem;border-radius:2rem;font-size:1.2rem;font-weight:700;"><?=$gc?> imgs</span></td>
+                            <td><span style="background:rgba(14,36,49,0.08);color:var(--navy);padding:0.3rem 0.9rem;border-radius:2rem;font-size:1.2rem;font-weight:700;"><?=$p['gallery_count']?> imgs</span></td>
                             <td>
                                 <div style="display:flex;gap:0.6rem;">
-                                    <a href="projects.php?edit=<?=$p['id']?>" class="btn-outline-navy" style="padding:0.6rem 1rem;font-size:1.25rem;"><i class="fas fa-pen"></i></a>
-                                    <a href="projects.php?delete=<?=$p['id']?>" class="btn-outline-danger" style="padding:0.6rem 1rem;font-size:1.25rem;" onclick="return confirm('Delete this project?')"><i class="fas fa-trash"></i></a>
+                                    <!-- Hide/Show toggle — FIRST -->
+                                    <button
+                                        class="btn-toggle-vis <?=$p['is_hidden']?'hidden':'visible'?>"
+                                        id="togbtn-<?=$p['id']?>"
+                                        data-id="<?=$p['id']?>"
+                                        data-hidden="<?=$p['is_hidden']?>"
+                                        title="<?=$p['is_hidden']?'Make Visible':'Hide from Public'?>"
+                                        onclick="toggleVisibility(this)">
+                                        <i class="fas <?=$p['is_hidden']?'fa-eye':'fa-eye-slash'?>"></i>
+                                    </button>
+                                    <!-- Edit -->
+                                    <a href="projects.php?edit=<?=$p['id']?>" class="btn-outline-navy" style="padding:0.6rem 1rem;font-size:1.25rem;" title="Edit"><i class="fas fa-pen"></i></a>
+                                    <!-- Delete -->
+                                    <a href="projects.php?delete=<?=$p['id']?>" class="btn-outline-danger" style="padding:0.6rem 1rem;font-size:1.25rem;" title="Delete" onclick="return confirm('Delete this project?')"><i class="fas fa-trash"></i></a>
                                 </div>
                             </td>
                         </tr>
@@ -233,12 +294,184 @@ if(isset($_GET['edit'])&&is_numeric($_GET['edit'])){
 
     </div>
 </div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+// ── Sidebar toggle ────────────────────────────────────────────────────────────
 const menuToggle=document.getElementById('menuToggle'),sidebar=document.getElementById('sidebar');
 if(menuToggle&&sidebar)menuToggle.addEventListener('click',()=>sidebar.classList.toggle('active'));
+
+// ── File upload label update ──────────────────────────────────────────────────
 document.querySelectorAll('.upload-zone input[type="file"]').forEach(i=>{
-    i.addEventListener('change',function(){const l=this.closest('.upload-zone').querySelector('p strong');if(l&&this.files.length)l.textContent=this.files.length>1?this.files.length+' files selected':this.files[0].name;});
+    i.addEventListener('change',function(){
+        const l=this.closest('.upload-zone').querySelector('p strong');
+        if(l&&this.files.length) l.textContent=this.files.length>1?this.files.length+' files selected':this.files[0].name;
+    });
+});
+
+// ── Toast helper ──────────────────────────────────────────────────────────────
+function showToast(message, type='success'){
+    const container=document.getElementById('toast-container');
+    const icon = type==='success'
+        ? '<i class="fas fa-circle-check"></i>'
+        : '<i class="fas fa-circle-exclamation"></i>';
+    const toast=document.createElement('div');
+    toast.className=`toast-msg ${type}`;
+    toast.innerHTML=`${icon} ${message}`;
+    container.appendChild(toast);
+    setTimeout(()=>{
+        toast.style.animation='toastOut 0.3s ease forwards';
+        toast.addEventListener('animationend',()=>toast.remove());
+    }, 3000);
+}
+
+// ── Confirm Modal ─────────────────────────────────────────────────────────────
+let _pendingToggleBtn = null;
+
+function toggleVisibility(btn){
+    _pendingToggleBtn = btn;
+    const isHidden = parseInt(btn.dataset.hidden);
+
+    const modal      = document.getElementById('confirmModal');
+    const modalIcon  = document.getElementById('confirmIcon');
+    const modalTitle = document.getElementById('confirmTitle');
+    const modalMsg   = document.getElementById('confirmMsg');
+    const modalOk    = document.getElementById('confirmOk');
+
+    if(isHidden){
+        modalIcon.className  = 'confirm-icon show';
+        modalIcon.innerHTML  = '<i class="fas fa-eye"></i>';
+        modalTitle.textContent = 'Make Visible';
+        modalMsg.textContent   = 'This project will be visible again on the public page.';
+        modalOk.textContent    = 'Yes, show it';
+        modalOk.className      = 'cm-btn cm-btn-show';
+    } else {
+        modalIcon.className  = 'confirm-icon hide';
+        modalIcon.innerHTML  = '<i class="fas fa-eye-slash"></i>';
+        modalTitle.textContent = 'Hide Project';
+        modalMsg.textContent   = 'This project will be hidden from the public page. You can restore it anytime.';
+        modalOk.textContent    = 'Yes, hide it';
+        modalOk.className      = 'cm-btn cm-btn-hide';
+    }
+
+    modal.classList.add('cm-open');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeConfirmModal(){
+    document.getElementById('confirmModal').classList.remove('cm-open');
+    document.body.style.overflow = '';
+    _pendingToggleBtn = null;
+}
+
+function confirmToggle(){
+    const btn = _pendingToggleBtn;
+    if(!btn) return;
+    closeConfirmModal();
+
+    btn.classList.add('loading');
+    const id   = btn.dataset.id;
+    const icon = btn.querySelector('i');
+
+    fetch(`projects.php?ajax_toggle=${id}`)
+        .then(res=>res.json())
+        .then(data=>{
+            if(data.success){
+                const newHidden = data.is_hidden;
+                const row   = document.getElementById(`row-${id}`);
+                const badge = document.getElementById(`badge-${id}`);
+
+                btn.dataset.hidden = newHidden;
+                btn.classList.remove('loading','visible','hidden');
+                btn.classList.add(newHidden ? 'hidden' : 'visible');
+                btn.title = newHidden ? 'Make Visible' : 'Hide from Public';
+                icon.className = `fas ${newHidden ? 'fa-eye' : 'fa-eye-slash'}`;
+
+                row.classList.toggle('row-hidden', newHidden === 1);
+                badge.style.display = newHidden ? '' : 'none';
+
+                showToast(
+                    newHidden
+                        ? 'Project hidden from the public page.'
+                        : 'Project is now visible on the public page.',
+                    'success'
+                );
+            } else {
+                showToast('Something went wrong. Please try again.', 'error');
+                btn.classList.remove('loading');
+            }
+        })
+        .catch(()=>{
+            showToast('Network error. Please try again.', 'error');
+            btn.classList.remove('loading');
+        });
+}
+
+// Close modal on backdrop click or Escape key
+document.getElementById('confirmModal').addEventListener('click', function(e){
+    if(e.target === this) closeConfirmModal();
+});
+document.addEventListener('keydown', e => {
+    if(e.key === 'Escape') closeConfirmModal();
 });
 </script>
-</body></html>
+
+<!-- ── Visibility Confirm Modal ─────────────────────────────────────────────── -->
+<div id="confirmModal" class="cm-overlay" role="dialog" aria-modal="true">
+    <div class="cm-box">
+        <div class="confirm-icon" id="confirmIcon"></div>
+        <h3 class="cm-title" id="confirmTitle">Confirm</h3>
+        <p class="cm-msg" id="confirmMsg"></p>
+        <div class="cm-actions">
+            <button class="cm-btn cm-btn-cancel" onclick="closeConfirmModal()">
+                <i class="fas fa-xmark"></i> Cancel
+            </button>
+            <button class="cm-btn" id="confirmOk" onclick="confirmToggle()"></button>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+
+<style>
+/* ── Confirm Modal ────────────────────────────────────────────────────────── */
+.cm-overlay{
+    display:none;position:fixed;inset:0;z-index:9998;
+    align-items:center;justify-content:center;padding:1.6rem;
+    background:rgba(5,8,30,0.7);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+}
+.cm-overlay.cm-open{display:flex;}
+.cm-box{
+    background:#0e0f31;border-radius:1.4rem;padding:3.2rem 3rem 2.8rem;
+    width:100%;max-width:40rem;text-align:center;
+    box-shadow:0 2.4rem 7rem rgba(0,0,0,0.65);
+    animation:cmPop 0.32s cubic-bezier(0.34,1.5,0.64,1) both;
+}
+@keyframes cmPop{
+    from{opacity:0;transform:scale(0.88) translateY(2rem);}
+    to{opacity:1;transform:scale(1) translateY(0);}
+}
+.confirm-icon{
+    width:6.4rem;height:6.4rem;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-size:2.4rem;margin:0 auto 1.8rem;
+}
+.confirm-icon.hide{background:rgba(180,83,9,0.18);color:#f59e0b;}
+.confirm-icon.show{background:rgba(34,197,94,0.15);color:#22c55e;}
+.cm-title{font-family:'Poppins',sans-serif;font-size:2rem;font-weight:800;color:#fff;margin:0 0 1rem;}
+.cm-msg{font-family:'Poppins',sans-serif;font-size:1.35rem;color:rgba(255,255,255,0.55);line-height:1.65;margin:0 0 2.6rem;}
+.cm-actions{display:flex;gap:1rem;justify-content:center;}
+.cm-btn{
+    display:inline-flex;align-items:center;gap:0.7rem;
+    font-family:'Poppins',sans-serif;font-size:1.35rem;font-weight:700;
+    padding:1rem 2.2rem;border-radius:0.8rem;border:none;cursor:pointer;
+    transition:transform 0.2s,box-shadow 0.2s;
+}
+.cm-btn:hover{transform:translateY(-0.2rem);}
+.cm-btn-cancel{background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.65);border:0.15rem solid rgba(255,255,255,0.15);}
+.cm-btn-cancel:hover{background:rgba(255,255,255,0.14);color:#fff;}
+.cm-btn-hide{background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;box-shadow:0 0.4rem 1.4rem rgba(245,158,11,0.35);}
+.cm-btn-hide:hover{box-shadow:0 0.8rem 2rem rgba(245,158,11,0.5);}
+.cm-btn-show{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;box-shadow:0 0.4rem 1.4rem rgba(34,197,94,0.35);}
+.cm-btn-show:hover{box-shadow:0 0.8rem 2rem rgba(34,197,94,0.5);}
+</style>
